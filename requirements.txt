@@ -1,0 +1,11 @@
+# requirements.txt
+
+# For the Graphical User Interface (GUI)
+dearpygui
+
+# For CAN Bus communication
+python-can
+
+# For numerical processing in the autotuners and analysis
+numpy
+scipy

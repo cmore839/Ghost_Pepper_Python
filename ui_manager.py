@@ -9,26 +9,21 @@ class UIManager:
         self._ui_needs_rebuild = False
 
     def create_all_ui_panels(self):
-        """Creates all the main UI panels in the left pane."""
         self._create_motor_management_panel()
         self._create_motor_limits_panel()
         self._create_motor_params_panel()
         self._create_real_time_control_panel()
         self._create_pid_tuning_panel()
         self._create_winder_panel()
-        self._create_ganging_panel()
+        self._create_gearing_panel() 
         self._create_advanced_tuning_panel()
         self._create_plot_manager_panel()
         self._create_general_settings_panel()
 
     def rebuild_dynamic_ui(self):
-        """Flags that the dynamic parts of the UI need to be redrawn."""
         self._ui_needs_rebuild = True
 
     def create_and_update_dynamic_ui(self):
-        """
-        This method is called only when the UI structure needs to change.
-        """
         if self._ui_needs_rebuild:
             if dpg.does_item_exist("plot_manager_content"):
                 dpg.delete_item("plot_manager_content", children_only=True)
@@ -41,19 +36,19 @@ class UIManager:
             self._ui_needs_rebuild = False
         
         motor_ids = [str(m.id) for m in self._viewmodel.motors]
-        if dpg.does_item_exist("ganging_leader_selector"):
-            dpg.configure_item("ganging_leader_selector", items=motor_ids)
-            dpg.configure_item("ganging_follower_selector", items=motor_ids)
+        if dpg.does_item_exist("gearing_leader_selector"):
+            dpg.configure_item("gearing_leader_selector", items=motor_ids)
+            dpg.configure_item("gearing_follower_selector", items=motor_ids)
         if dpg.does_item_exist("winder_bobbin_selector"):
             dpg.configure_item("winder_bobbin_selector", items=motor_ids)
             dpg.configure_item("winder_tension_selector", items=motor_ids)
-
-        if dpg.does_item_exist("ganging_status_group"):
-            dpg.delete_item("ganging_status_group", children_only=True)
-            for gang in self._viewmodel.gangs:
-                dpg.add_text(f"Leader: {gang['leader']}", parent="ganging_status_group")
-                for f in gang['followers']:
-                    dpg.add_text(f" - Follower: {f['id']} ({f['mode']})", parent="ganging_status_group")
+            
+        if dpg.does_item_exist("gearing_status_group"):
+            dpg.delete_item("gearing_status_group", children_only=True)
+            if self._viewmodel._gearing_service.is_active:
+                gear_service = self._viewmodel._gearing_service
+                dpg.add_text(f"Leader: {gear_service.leader_id}", parent="gearing_status_group")
+                dpg.add_text(f"Follower: {gear_service.follower_id}", parent="gearing_status_group")
         
         if dpg.does_item_exist("autotune_status_text"):
             dpg.set_value("autotune_status_text", self._viewmodel.autotune_status)
@@ -62,11 +57,58 @@ class UIManager:
             
         if dpg.does_item_exist("winder_status_text"):
             dpg.set_value("winder_status_text", self._viewmodel.winder_status)
+            
+        if dpg.does_item_exist("sysid_status_text"):
+            dpg.set_value("sysid_status_text", self._viewmodel.sysid_status)
+            dpg.configure_item("sysid_start_btn", enabled=not self._viewmodel._sysid_tuner_service.is_active)
+            if self._viewmodel.sysid_results:
+                dpg.set_value("sysid_k_text", f"{self._viewmodel.sysid_results['K']:.4f}")
+                dpg.set_value("sysid_tau_text", f"{self._viewmodel.sysid_results['tau']:.4f} s")
+                dpg.set_value("sysid_p_text", f"{self._viewmodel.sysid_results['p']:.4f}")
+                dpg.set_value("sysid_i_text", f"{self._viewmodel.sysid_results['i']:.4f}")
+                dpg.enable_item("sysid_apply_btn")
+            else:
+                dpg.set_value("sysid_k_text", "--"); dpg.set_value("sysid_tau_text", "--"); dpg.set_value("sysid_p_text", "--"); dpg.set_value("sysid_i_text", "--")
+                dpg.disable_item("sysid_apply_btn")
+
+        if dpg.does_item_exist("current_test_rise_time"):
+            results = self._viewmodel.current_test_results
+            if results:
+                dpg.set_value("current_test_rise_time", f"{results['rise_time']*1000:.2f} ms" if results['rise_time'] > 0 else "N/A")
+                dpg.set_value("current_test_overshoot", f"{results['overshoot']:.2f} %")
+                dpg.set_value("current_test_settling_time", f"{results['settling_time']*1000:.2f} ms" if results['settling_time'] > 0 else "N/A")
+                dpg.set_value("current_test_peak_time", f"{results['peak_time']*1000:.2f} ms" if results['peak_time'] > 0 else "N/A")
+            else:
+                dpg.set_value("current_test_rise_time", "--"); dpg.set_value("current_test_overshoot", "--"); dpg.set_value("current_test_settling_time", "--"); dpg.set_value("current_test_peak_time", "--")
+                
+        recs = self._viewmodel.tuning_recommendations
+        if recs:
+            dpg.set_value("reco_time_constant_text", f"{recs['electrical_time_constant_ms']:.3f} ms")
+            dpg.set_value("reco_current_bw_text", f"{recs['recommended_current_bw']:.0f} Hz")
+            dpg.set_value("reco_vel_p_text", f"{recs['recommended_vel_p']:.2f}")
+            dpg.set_value("reco_vel_i_text", f"{recs['recommended_vel_i']:.2f}")
+            dpg.set_value("reco_angle_p_text", f"{recs['recommended_angle_p']:.2f}")
+        else:
+            dpg.set_value("reco_time_constant_text", "--"); dpg.set_value("reco_current_bw_text", "--"); dpg.set_value("reco_vel_p_text", "--"); dpg.set_value("reco_vel_i_text", "--"); dpg.set_value("reco_angle_p_text", "--")
+            
+        if dpg.does_item_exist("characterization_status_text"):
+            dpg.set_value("characterization_status_text", self._viewmodel.characterization_status)
+            dpg.configure_item("characterize_start_btn", enabled=not self._viewmodel._characterization_service.is_active)
 
     def _create_motor_management_panel(self):
-        with dpg.collapsing_header(label="Motor Management", default_open=False):
+        with dpg.collapsing_header(label="Device Configuration", default_open=False):
             dpg.add_button(label="Flip Sensor Direction", width=-1, callback=self._viewmodel.flip_sensor_direction)
             dpg.add_button(label="Save All Parameters to Motor", width=-1, callback=self._viewmodel.save_to_eeprom)
+            dpg.add_separator()
+            dpg.add_text("Set CAN ID and Restart", color=[255, 255, 150])
+            dpg.add_text("Warning: This will restart the motor.", color=[255, 100, 100])
+            with dpg.table(header_row=False):
+                dpg.add_table_column(width_fixed=True)
+                dpg.add_table_column(width_stretch=True)
+                with dpg.table_row():
+                    dpg.add_text("New CAN ID")
+                    dpg.add_input_int(tag="new_can_id_input", width=-1, min_value=1, max_value=127, default_value=1)
+            dpg.add_button(label="Set ID, Save & Restart", width=-1, callback=self._viewmodel.set_id_save_and_restart)
 
     def _create_motor_limits_panel(self):
         with dpg.collapsing_header(label="Motor Limits", default_open=False):
@@ -150,7 +192,7 @@ class UIManager:
                 dpg.add_table_column(width_stretch=True)
                 with dpg.table_row():
                     dpg.add_text("P Gain")
-                    dpg.add_slider_float(tag="angle_p_slider", max_value=50.0, callback=lambda s, a: self._viewmodel.set_pid_gain(REG_ANG_PID_P, a), width=-1)
+                    dpg.add_slider_float(tag="angle_p_slider", max_value=500.0, callback=lambda s, a: self._viewmodel.set_pid_gain(REG_ANG_PID_P, a), width=-1)
                 with dpg.table_row():
                     dpg.add_text("I Gain")
                     dpg.add_slider_float(tag="angle_i_slider", max_value=500.0, callback=lambda s, a: self._viewmodel.set_pid_gain(REG_ANG_PID_I, a), width=-1)
@@ -190,6 +232,7 @@ class UIManager:
 
             dpg.add_separator()
             dpg.add_text("Current Iq Controller", color=[150, 255, 150])
+            # ... (rest of PID tuning panel is unchanged)
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
@@ -224,8 +267,10 @@ class UIManager:
                     dpg.add_text("LPF Time Const (s)")
                     dpg.add_slider_float(tag="curd_lpf_slider", max_value=0.1, format="%.4f", callback=lambda s, a: self._viewmodel.set_pid_gain(REG_CURD_LPF_T, a), width=-1)
 
+
     def _create_winder_panel(self):
         with dpg.collapsing_header(label="Coil Winder", default_open=False):
+            # ... (winder panel is unchanged)
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
@@ -284,45 +329,63 @@ class UIManager:
                 dpg.add_text("Status:")
                 dpg.add_text("Idle", tag="winder_status_text")
 
-    def _create_ganging_panel(self):
-        with dpg.collapsing_header(label="Motion Ganging", default_open=False):
+    def _create_gearing_panel(self):
+        with dpg.collapsing_header(label="Electronic Gearing", default_open=False):
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
                 with dpg.table_row():
                     dpg.add_text("Leader Motor")
-                    dpg.add_combo([], tag="ganging_leader_selector", width=-1)
+                    dpg.add_combo([], tag="gearing_leader_selector", width=-1)
                 with dpg.table_row():
                     dpg.add_text("Follower Motor")
-                    dpg.add_combo([], tag="ganging_follower_selector", width=-1)
+                    dpg.add_combo([], tag="gearing_follower_selector", width=-1)
                 with dpg.table_row():
-                    dpg.add_text("Ganging Mode")
-                    dpg.add_combo(("Sync", "Anti-Sync"), tag="ganging_mode_selector", default_value="Sync", width=-1)
+                    dpg.add_text("Follower Ratio")
+                    dpg.add_input_float(tag="gearing_follower_ratio", default_value=-1.0, width=-1)
             
-            def add_gang_callback():
-                leader_id = dpg.get_value("ganging_leader_selector")
-                follower_id = dpg.get_value("ganging_follower_selector")
-                mode = dpg.get_value("ganging_mode_selector")
-                self._viewmodel.add_gang(leader_id, follower_id, mode)
+            def start_gearing_callback():
+                leader_id = dpg.get_value("gearing_leader_selector")
+                follower_id = dpg.get_value("gearing_follower_selector")
+                ratio = dpg.get_value("gearing_follower_ratio")
+                self._viewmodel.start_gearing(leader_id, follower_id, ratio)
+                
+            # NEW: Callback for the drive-by-wire button
+            def start_drive_by_wire_callback():
+                leader_id = dpg.get_value("gearing_leader_selector")
+                follower_id = dpg.get_value("gearing_follower_selector")
+                ratio = dpg.get_value("gearing_follower_ratio")
+                self._viewmodel.start_drive_by_wire(leader_id, follower_id, ratio)
 
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Create Gang", width=-1, callback=add_gang_callback)
-                dpg.add_button(label="Remove Gang", width=-1, callback=self._viewmodel.remove_gang)
+                dpg.add_button(label="Start Gearing", width=-1, callback=start_gearing_callback)
+                dpg.add_button(label="Stop Gearing", width=-1, callback=self._viewmodel.stop_gearing)
+            
+            # NEW: Add the drive-by-wire button
+            dpg.add_button(label="Start Drive-by-Wire", width=-1, callback=start_drive_by_wire_callback)
             dpg.add_separator()
             
-            dpg.add_text("Ganged Control")
+            dpg.add_text("Virtual Master Control (Position Mode)")
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
                 with dpg.table_row():
-                    dpg.add_text("Ganged Target")
-                    dpg.add_input_float(width=-1, tag="ganged_target_input", on_enter=True,
-                                        callback=lambda s, a: self._viewmodel.set_ganged_target(a))
-            
-            dpg.add_group(tag="ganging_status_group")
+                    dpg.add_text("Target Position (rad)")
+                    dpg.add_input_float(width=-1, tag="gearing_target_input", on_enter=True,
+                                        callback=lambda s, a: self._viewmodel.set_gearing_target(a))
+            dpg.add_group(tag="gearing_status_group")
 
     def _create_advanced_tuning_panel(self):
         with dpg.collapsing_header(label="Advanced Tuning", default_open=False):
+            # ... (advanced tuning panel is unchanged)
+            self._create_characterization_panel()
+            dpg.add_separator()
+            self._create_recommendations_panel()
+            dpg.add_separator()
+            self._create_current_bw_panel()
+            dpg.add_separator()
+            self._create_current_test_panel()
+            dpg.add_separator()
             dpg.add_text("Autotuning (Ziegler-Nichols)", color=[150, 255, 150])
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
@@ -348,27 +411,120 @@ class UIManager:
                 dpg.add_text("Idle", tag="autotune_status_text")
 
             dpg.add_separator()
-            dpg.add_text("Advanced Current Tuning", color=[150, 255, 150])
-            with dpg.table(header_row=False):
-                dpg.add_table_column(width_fixed=True)
-                dpg.add_table_column(width_stretch=True)
-                with dpg.table_row():
-                    dpg.add_text("Motor R (Ohm)")
-                    dpg.add_input_float(tag="bw_motor_r", width=-1, default_value=0.5)
-                with dpg.table_row():
-                    dpg.add_text("Motor L (Henry)")
-                    dpg.add_input_float(tag="bw_motor_l", width=-1, default_value=0.0015, format="%.5f")
-                with dpg.table_row():
-                    dpg.add_text("Bandwidth (Hz)")
-                    dpg.add_input_float(tag="current_bw_input", default_value=1000.0, width=-1)
+            self._create_sysid_panel()
+
+    def _create_characterization_panel(self):
+        # ... (unchanged)
+        dpg.add_text("Motor Characterization", color=[150, 255, 150])
+        with dpg.table(header_row=False):
+            dpg.add_table_column(width_fixed=True); dpg.add_table_column(width_stretch=True)
+            with dpg.table_row():
+                dpg.add_text("Test Voltage (V)")
+                dpg.add_input_float(tag="characterize_voltage", width=-1, default_value=1.0)
+        dpg.add_button(label="Characterize Motor", tag="characterize_start_btn", width=-1, callback=self._viewmodel.start_characterization)
+        with dpg.group(horizontal=True):
+            dpg.add_text("Status:")
+            dpg.add_text("Idle", tag="characterization_status_text")
+
+    def _create_recommendations_panel(self):
+        # ... (unchanged)
+        dpg.add_text("Tuning Recommendations", color=[150, 255, 150])
+        dpg.add_button(label="Calculate Recommendations", width=-1, callback=self._viewmodel.calculate_tuning_recommendations)
+        with dpg.table(header_row=False):
+            dpg.add_table_column(width_fixed=True); dpg.add_table_column(width_stretch=True)
+            with dpg.table_row():
+                dpg.add_text("Electrical Time Constant")
+                dpg.add_text("--", tag="reco_time_constant_text")
+            with dpg.table_row():
+                dpg.add_text("Recommended Current BW")
+                dpg.add_text("--", tag="reco_current_bw_text")
+            with dpg.table_row():
+                dpg.add_text("Safe Velocity P Gain")
+                dpg.add_text("--", tag="reco_vel_p_text")
+            with dpg.table_row():
+                dpg.add_text("Safe Velocity I Gain")
+                dpg.add_text("--", tag="reco_vel_i_text")
+            with dpg.table_row():
+                dpg.add_text("Safe Angle P Gain")
+                dpg.add_text("--", tag="reco_angle_p_text")
+            with dpg.table_row():
+                dpg.add_text("Aggression (multiplier)")
+                dpg.add_input_float(tag="reco_aggression", width=-1, default_value=1.0, min_value=0.1, max_value=10.0)
+        dpg.add_button(label="Apply Recommended Gains", width=-1, callback=self._viewmodel.apply_recommended_gains)
+
+    def _create_sysid_panel(self):
+        # ... (unchanged)
+        dpg.add_text("System ID Autotuner", color=[150, 255, 150])
+        with dpg.table(header_row=False):
+            dpg.add_table_column(width_fixed=True); dpg.add_table_column(width_stretch=True)
+            with dpg.table_row(): 
+                dpg.add_text("Start Freq (Hz)")
+                dpg.add_input_float(tag="sysid_start_freq", width=-1, default_value=1.0)
+            with dpg.table_row(): 
+                dpg.add_text("End Freq (Hz)")
+                dpg.add_input_float(tag="sysid_end_freq", width=-1, default_value=80.0)
+            with dpg.table_row(): 
+                dpg.add_text("Torque Amplitude")
+                dpg.add_input_float(tag="sysid_amp", width=-1, default_value=0.3)
+            with dpg.table_row(): 
+                dpg.add_text("Duration (s)")
+                dpg.add_input_float(tag="sysid_dur", width=-1, default_value=5.0)
+            with dpg.table_row():
+                dpg.add_text("Response Time (s)")
+                dpg.add_slider_float(label="##lambda", tag="sysid_lambda", min_value=0.01, max_value=0.5, default_value=0.05, format="%.3f s", width=-1)
+        
+        dpg.add_button(label="Start System ID", tag="sysid_start_btn", callback=self._viewmodel.start_sysid, width=-1)
+        with dpg.group(horizontal=True):
+            dpg.add_text("Status:")
+            dpg.add_text("Idle", tag="sysid_status_text")
+        
+        dpg.add_text("Identified Model:")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  K (Gain):"); dpg.add_text("--", tag="sysid_k_text")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  τ (Time Const):"); dpg.add_text("--", tag="sysid_tau_text")
+
+        dpg.add_text("Calculated Gains:")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  P:"); dpg.add_text("--", tag="sysid_p_text")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  I:"); dpg.add_text("--", tag="sysid_i_text")
+        
+        dpg.add_button(label="Apply SysID Gains", tag="sysid_apply_btn", callback=self._viewmodel.apply_sysid_gains, width=-1)
+
+    def _create_current_test_panel(self):
+        # ... (unchanged)
+        dpg.add_text("Current Controller Step Test", color=[150, 255, 150])
+        with dpg.table(header_row=False):
+            dpg.add_table_column(width_stretch=True); dpg.add_table_column(width_fixed=True)
+            with dpg.table_row():
+                dpg.add_input_float(label="##ctest_amp", tag="current_test_amp", default_value=0.5, width=-1)
+                dpg.add_button(label="Run Test", callback=self._viewmodel.run_current_step_test)
+        dpg.add_text("Performance:")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  Rise Time:"); dpg.add_text("--", tag="current_test_rise_time")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  Overshoot:"); dpg.add_text("--", tag="current_test_overshoot")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  Settling Time:"); dpg.add_text("--", tag="current_test_settling_time")
+        with dpg.group(horizontal=True):
+            dpg.add_text("  Peak Time:"); dpg.add_text("--", tag="current_test_peak_time")
+
+    def _create_current_bw_panel(self):
+        # ... (unchanged)
+        dpg.add_text("Current Controller Tuning from Bandwidth", color=[150, 255, 150])
+        with dpg.table(header_row=False):
+            dpg.add_table_column(width_fixed=True)
+            dpg.add_table_column(width_stretch=True)
+            with dpg.table_row():
+                dpg.add_text("Target Bandwidth (Hz)")
+                dpg.add_input_float(tag="current_bw_input", default_value=1000.0, width=-1)
+        
+        def apply_bw_gains_callback():
+            bw = dpg.get_value("current_bw_input")
+            self._viewmodel.calculate_and_apply_bandwidth_gains(bw)
             
-            def apply_bw_gains_callback():
-                bw = dpg.get_value("current_bw_input")
-                r = dpg.get_value("bw_motor_r")
-                l = dpg.get_value("bw_motor_l")
-                self._viewmodel.calculate_and_apply_bandwidth_gains(bw, r, l)
-                
-            dpg.add_button(label="Calculate & Apply Current Gains", width=-1, callback=apply_bw_gains_callback)
+        dpg.add_button(label="Calculate & Apply Current Gains", width=-1, callback=apply_bw_gains_callback)
 
     def _create_plot_manager_panel(self):
         with dpg.collapsing_header(label="Plot Manager", default_open=False):
@@ -391,6 +547,7 @@ class UIManager:
 
     def _create_general_settings_panel(self):
         with dpg.collapsing_header(label="General Settings", default_open=False):
+            # ... (general settings panel is unchanged)
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
@@ -457,13 +614,13 @@ class UIManager:
         dpg.add_plot_legend(parent=plot_config.dpg_tag)
         dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", parent=plot_config.dpg_tag)
         
+        y_axis_tag = dpg.add_plot_axis(dpg.mvYAxis, label="Value", parent=plot_config.dpg_tag)
+        
         for series_config in plot_config.series_list:
-            y_axis_tag = dpg.add_plot_axis(dpg.mvYAxis, label=series_config.data_key, parent=plot_config.dpg_tag)
             series_config.dpg_tag = dpg.add_line_series([], [], label=series_config.data_key, parent=y_axis_tag)
     
     def update_plots_data(self):
         if self._viewmodel.is_plot_paused: return
-        start_time = self._viewmodel.start_time
         plot = self._viewmodel.the_plot
 
         if not dpg.does_item_exist(plot.dpg_tag): return
@@ -471,22 +628,19 @@ class UIManager:
         for series in plot.series_list:
             data = self._viewmodel.get_stream_data(series.data_key)
             if data and dpg.does_item_exist(series.dpg_tag):
-                timestamps = data["timestamps"]
+                timestamps = np.array(data["timestamps"]) - self._viewmodel.start_time
                 values = data["values"]
                 dpg.set_value(series.dpg_tag, [list(timestamps), list(values)])
         
         if not dpg.get_plot_query_rects(plot.dpg_tag):
-             dpg.fit_axis_data(dpg.get_item_children(plot.dpg_tag, 1)[0])
-             for y_axis in dpg.get_item_children(plot.dpg_tag, 1)[1:]:
-                dpg.fit_axis_data(y_axis)
+             dpg.fit_axis_data(dpg.get_item_children(plot.dpg_tag, 1)[0]) # X-axis
+             dpg.fit_axis_data(dpg.get_item_children(plot.dpg_tag, 1)[1]) # Y-axis
 
     def update_live_data(self):
         motor = self._viewmodel.active_motor
         if not motor:
             if dpg.does_item_exist("live_angle_text"):
-                dpg.set_value("live_angle_text", "--")
-                dpg.set_value("live_velocity_text", "--")
-                dpg.set_value("live_iq_text", "--")
+                dpg.set_value("live_angle_text", "--"); dpg.set_value("live_velocity_text", "--"); dpg.set_value("live_iq_text", "--")
             return
         if dpg.does_item_exist("live_angle_text"):
             dpg.set_value("live_angle_text", f"{motor.angle:.2f} rad")
@@ -503,6 +657,14 @@ class UIManager:
             dpg.set_value("actual_freq_text", f"{packet_rate} Hz")
         if dpg.does_item_exist("plot_fps_text"):
             dpg.set_value("plot_fps_text", f"{plot_rate} FPS")
+
+    def update_enable_checkbox(self, is_enabled):
+        if dpg.does_item_exist("enable_motor_checkbox"):
+            dpg.set_value("enable_motor_checkbox", is_enabled)
+
+    def update_can_id_input(self, motor_id):
+        if dpg.does_item_exist("new_can_id_input"):
+            dpg.set_value("new_can_id_input", motor_id)
 
     def update_parameter_widgets(self, reg_id, value):
         widget_map = {

@@ -2,11 +2,13 @@
 import time
 import threading
 import numpy as np
+from services.analysis_service import AnalysisService
 
 class TuningService:
     def __init__(self, viewmodel):
         self._viewmodel = viewmodel
         self._thread = None
+        self._analysis_service = AnalysisService()
 
     def start_autotune(self, motor_id, relay_amplitude, duration):
         """Starts the autotuning process in a separate thread."""
@@ -86,3 +88,40 @@ class TuningService:
             vm.autotune_status = f"Error: {e}"
         finally:
             vm.autotune_active = False
+
+    def run_current_step_test(self, motor_id, amplitude):
+        if self._thread and self._thread.is_alive():
+            return
+        
+        self._thread = threading.Thread(
+            target=self._current_step_test_thread,
+            args=(motor_id, amplitude),
+            daemon=True
+        )
+        self._thread.start()
+
+    def _current_step_test_thread(self, motor_id, amplitude):
+        vm = self._viewmodel
+        try:
+            stream_key = f"motor_{motor_id}_current_q"
+            vm._data_service.get_stream_data(stream_key)["timestamps"].clear()
+            vm._data_service.get_stream_data(stream_key)["values"].clear()
+            
+            vm.log_message("Current Test: Starting...")
+            vm.send_control_mode_to_motor(motor_id, "Torque")
+            time.sleep(0.1)
+            vm.send_target_to_motor(motor_id, amplitude)
+            time.sleep(0.3)
+            vm.send_target_to_motor(motor_id, 0.0)
+            time.sleep(0.2)
+            vm.log_message("Current Test: Finished.")
+
+            stream_data = vm._data_service.get_stream_data(stream_key)
+            timestamps = list(stream_data["timestamps"])
+            currents = list(stream_data["values"])
+            
+            stats = self._analysis_service.analyze_step_response(timestamps, currents, amplitude)
+            vm.current_test_results = stats
+
+        except Exception as e:
+            vm.log_message(f"Current Test ERROR: {e}")

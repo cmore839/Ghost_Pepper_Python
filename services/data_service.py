@@ -24,9 +24,12 @@ class DataService:
         }
 
     def add_data_point(self, key, timestamp, value):
-        if key in self._raw_data_streams:
-            self._raw_data_streams[key]["timestamps"].append(timestamp)
-            self._raw_data_streams[key]["values"].append(value)
+        if key not in self._raw_data_streams:
+            self.register_stream(key)
+        
+        self._raw_data_streams[key]["timestamps"].append(timestamp)
+        self._raw_data_streams[key]["values"].append(value)
+
 
     def get_stream_data(self, key):
         """

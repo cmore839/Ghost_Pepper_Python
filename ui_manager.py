@@ -17,6 +17,7 @@ class UIManager:
         self._create_winder_panel()
         self._create_gearing_panel() 
         self._create_advanced_tuning_panel()
+        self._create_performance_panel() # New Panel Added Here
         self._create_plot_manager_panel()
         self._create_general_settings_panel()
 
@@ -35,6 +36,7 @@ class UIManager:
             
             self._ui_needs_rebuild = False
         
+        # --- Start of Frequent UI Updates ---
         motor_ids = [str(m.id) for m in self._viewmodel.motors]
         if dpg.does_item_exist("gearing_leader_selector"):
             dpg.configure_item("gearing_leader_selector", items=motor_ids)
@@ -94,6 +96,9 @@ class UIManager:
         if dpg.does_item_exist("characterization_status_text"):
             dpg.set_value("characterization_status_text", self._viewmodel.characterization_status)
             dpg.configure_item("characterize_start_btn", enabled=not self._viewmodel._characterization_service.is_active)
+        
+        # New call to update performance results
+        self.update_performance_results_ui()
 
     def _create_motor_management_panel(self):
         with dpg.collapsing_header(label="Device Configuration", default_open=False):
@@ -232,7 +237,6 @@ class UIManager:
 
             dpg.add_separator()
             dpg.add_text("Current Iq Controller", color=[150, 255, 150])
-            # ... (rest of PID tuning panel is unchanged)
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
@@ -267,10 +271,8 @@ class UIManager:
                     dpg.add_text("LPF Time Const (s)")
                     dpg.add_slider_float(tag="curd_lpf_slider", max_value=0.1, format="%.4f", callback=lambda s, a: self._viewmodel.set_pid_gain(REG_CURD_LPF_T, a), width=-1)
 
-
     def _create_winder_panel(self):
         with dpg.collapsing_header(label="Coil Winder", default_open=False):
-            # ... (winder panel is unchanged)
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
@@ -350,7 +352,6 @@ class UIManager:
                 ratio = dpg.get_value("gearing_follower_ratio")
                 self._viewmodel.start_gearing(leader_id, follower_id, ratio)
                 
-            # NEW: Callback for the drive-by-wire button
             def start_drive_by_wire_callback():
                 leader_id = dpg.get_value("gearing_leader_selector")
                 follower_id = dpg.get_value("gearing_follower_selector")
@@ -361,7 +362,6 @@ class UIManager:
                 dpg.add_button(label="Start Gearing", width=-1, callback=start_gearing_callback)
                 dpg.add_button(label="Stop Gearing", width=-1, callback=self._viewmodel.stop_gearing)
             
-            # NEW: Add the drive-by-wire button
             dpg.add_button(label="Start Drive-by-Wire", width=-1, callback=start_drive_by_wire_callback)
             dpg.add_separator()
             
@@ -377,7 +377,6 @@ class UIManager:
 
     def _create_advanced_tuning_panel(self):
         with dpg.collapsing_header(label="Advanced Tuning", default_open=False):
-            # ... (advanced tuning panel is unchanged)
             self._create_characterization_panel()
             dpg.add_separator()
             self._create_recommendations_panel()
@@ -413,8 +412,32 @@ class UIManager:
             dpg.add_separator()
             self._create_sysid_panel()
 
+    def _create_performance_panel(self):
+        """Creates the new panel for performance analysis tests."""
+        with dpg.collapsing_header(label="Performance Analysis", default_open=False):
+            dpg.add_text("Run standardized tests to measure performance.")
+            with dpg.tab_bar():
+                with dpg.tab(label="Step Response"):
+                    dpg.add_text("Tests stability and responsiveness.")
+                    dpg.add_input_float(label="Step Amplitude (rad)", default_value=1.0, tag="perf_step_amp", width=150)
+                    dpg.add_input_float(label="Test Duration (s)", default_value=2.0, tag="perf_step_dur", width=150)
+                    dpg.add_button(label="Run Step Test", callback=lambda: self._viewmodel.start_performance_test("step_response"))
+                with dpg.tab(label="Constant Velocity"):
+                    dpg.add_text("Tests tracking error during a constant speed move.")
+                    dpg.add_input_float(label="Move Distance (rad)", default_value=10.0, tag="perf_velo_dist", width=150)
+                    dpg.add_input_float(label="Move Velocity (rad/s)", default_value=5.0, tag="perf_velo_speed", width=150)
+                    dpg.add_button(label="Run Velocity Test", callback=lambda: self._viewmodel.start_performance_test("constant_velocity"))
+                with dpg.tab(label="Reversing Move"):
+                    dpg.add_text("Tests dynamic error during a direction change.")
+                    dpg.add_input_float(label="Move Distance (rad)", default_value=5.0, tag="perf_rev_dist", width=150)
+                    dpg.add_input_float(label="Move Velocity (rad/s)", default_value=10.0, tag="perf_rev_speed", width=150)
+                    dpg.add_button(label="Run Reversing Test", callback=lambda: self._viewmodel.start_performance_test("reversing_move"))
+            dpg.add_separator()
+            dpg.add_text("Test Results:")
+            with dpg.child_window(tag="perf_results_area", height=100, border=True):
+                 dpg.add_text("No results yet.", tag="perf_results_text")
+
     def _create_characterization_panel(self):
-        # ... (unchanged)
         dpg.add_text("Motor Characterization", color=[150, 255, 150])
         with dpg.table(header_row=False):
             dpg.add_table_column(width_fixed=True); dpg.add_table_column(width_stretch=True)
@@ -427,7 +450,6 @@ class UIManager:
             dpg.add_text("Idle", tag="characterization_status_text")
 
     def _create_recommendations_panel(self):
-        # ... (unchanged)
         dpg.add_text("Tuning Recommendations", color=[150, 255, 150])
         dpg.add_button(label="Calculate Recommendations", width=-1, callback=self._viewmodel.calculate_tuning_recommendations)
         with dpg.table(header_row=False):
@@ -453,7 +475,6 @@ class UIManager:
         dpg.add_button(label="Apply Recommended Gains", width=-1, callback=self._viewmodel.apply_recommended_gains)
 
     def _create_sysid_panel(self):
-        # ... (unchanged)
         dpg.add_text("System ID Autotuner", color=[150, 255, 150])
         with dpg.table(header_row=False):
             dpg.add_table_column(width_fixed=True); dpg.add_table_column(width_stretch=True)
@@ -493,7 +514,6 @@ class UIManager:
         dpg.add_button(label="Apply SysID Gains", tag="sysid_apply_btn", callback=self._viewmodel.apply_sysid_gains, width=-1)
 
     def _create_current_test_panel(self):
-        # ... (unchanged)
         dpg.add_text("Current Controller Step Test", color=[150, 255, 150])
         with dpg.table(header_row=False):
             dpg.add_table_column(width_stretch=True); dpg.add_table_column(width_fixed=True)
@@ -511,7 +531,6 @@ class UIManager:
             dpg.add_text("  Peak Time:"); dpg.add_text("--", tag="current_test_peak_time")
 
     def _create_current_bw_panel(self):
-        # ... (unchanged)
         dpg.add_text("Current Controller Tuning from Bandwidth", color=[150, 255, 150])
         with dpg.table(header_row=False):
             dpg.add_table_column(width_fixed=True)
@@ -547,7 +566,6 @@ class UIManager:
 
     def _create_general_settings_panel(self):
         with dpg.collapsing_header(label="General Settings", default_open=False):
-            # ... (general settings panel is unchanged)
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
@@ -665,6 +683,19 @@ class UIManager:
     def update_can_id_input(self, motor_id):
         if dpg.does_item_exist("new_can_id_input"):
             dpg.set_value("new_can_id_input", motor_id)
+
+    def update_performance_results_ui(self):
+        """Updates the UI with the latest performance test results."""
+        if dpg.does_item_exist("perf_results_text"):
+            if self._viewmodel.performance_test_results:
+                results = self._viewmodel.performance_test_results
+                if "error" in results:
+                    result_str = f"Error: {results['error']}"
+                else:
+                    result_str = "\n".join([f"{key}: {value}" for key, value in results.items()])
+                dpg.set_value("perf_results_text", result_str)
+            else:
+                dpg.set_value("perf_results_text", "Run a test to see results.")
 
     def update_parameter_widgets(self, reg_id, value):
         widget_map = {

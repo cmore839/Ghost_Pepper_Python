@@ -6,8 +6,8 @@ class MainView:
     def __init__(self, viewmodel):
         self._viewmodel = viewmodel
         self._last_known_motor_ids = []
-        self._plot_update_counter = 0
-        self._last_fps_calc_time = time.time()
+        # REMOVED: self._plot_update_counter
+        # REMOVED: self._last_fps_calc_time
 
     def create_window(self):
         with dpg.window(tag="main_window", width=-1, height=-1, no_move=True, no_title_bar=True):
@@ -57,13 +57,7 @@ class MainView:
         
         if not self._viewmodel.is_plot_paused:
             self._viewmodel.ui_manager.update_plots_data()
-            self._plot_update_counter += 1
+            # --- FIX: Use the viewmodel's counter ---
+            self._viewmodel.plot_update_counter += 1
 
-        now = time.time()
-        if now - self._last_fps_calc_time > 1.0:
-            self._viewmodel.ui_manager.update_data_rate_display(
-                self._viewmodel.telemetry_packet_counter,
-                self._plot_update_counter
-            )
-            self._plot_update_counter = 0
-            self._last_fps_calc_time = now
+        # --- FIX: Removed the conflicting rate calculation from the view ---

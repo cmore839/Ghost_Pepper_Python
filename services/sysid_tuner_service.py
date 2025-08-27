@@ -2,6 +2,7 @@
 import time
 import threading
 import numpy as np
+import math
 from scipy.optimize import curve_fit
 
 class SysIdTunerService:
@@ -12,6 +13,7 @@ class SysIdTunerService:
 
     def start(self, config):
         if self.is_active:
+            print("SysID is already running.")
             return
 
         self.is_active = True
@@ -19,11 +21,15 @@ class SysIdTunerService:
         self._thread = threading.Thread(target=self._sysid_thread_func, args=(config,), daemon=True)
         self._thread.start()
 
-    def _simulate_first_order_response(self, t, K, tau, torque_input):
+    def _simulate_fopdt_response(self, t, K, tau, delay, torque_input):
+        """ Simulates a First-Order Plus Dead Time response. """
         v = np.zeros_like(t)
+        delayed_torque = np.interp(t - delay, t, torque_input, left=0, right=0)
+        
         for i in range(len(t) - 1):
             dt = t[i+1] - t[i]
-            v_dot = (K * torque_input[i] - v[i]) / tau
+            if tau <= 1e-6: tau = 1e-6
+            v_dot = (K * delayed_torque[i] - v[i]) / tau
             v[i+1] = v[i] + v_dot * dt
         return v
 
@@ -38,10 +44,16 @@ class SysIdTunerService:
             vm.send_control_mode_to_motor(motor_id, "Torque")
             time.sleep(0.2)
             
-            # Use data_service to clear and get data
             velocity_stream_key = f"motor_{motor_id}_velocity"
-            vm._data_service.get_stream_data(velocity_stream_key)["timestamps"].clear()
-            vm._data_service.get_stream_data(velocity_stream_key)["values"].clear()
+            velocity_stream = vm._data_service.get_stream_data(velocity_stream_key)
+            velocity_stream["timestamps"].clear()
+            velocity_stream["values"].clear()
+
+            # --- ADD THIS: Clear the gui_target stream ---
+            gui_target_stream = vm._data_service.get_stream_data("gui_target")
+            gui_target_stream["timestamps"].clear()
+            gui_target_stream["values"].clear()
+            # --- END ADD ---
 
             sent_commands = []
             start_time = time.perf_counter()
@@ -66,28 +78,44 @@ class SysIdTunerService:
             vm.sysid_status = "2/4: Aligning data..."
             
             history = vm._data_service.get_stream_data(velocity_stream_key)
-            measured_times = np.array(history["timestamps"])
-            measured_velocities = np.array(history["values"])
+            measured_times = np.array(list(history["timestamps"]))
+            measured_velocities = np.array(list(history["values"]))
             
             if len(measured_times) < 50:
-                raise ValueError("Not enough telemetry data.")
+                raise ValueError("Not enough telemetry data for analysis.")
                 
             measured_times -= measured_times[0]
             cmd_times, cmd_torques = zip(*sent_commands)
             aligned_velocities = np.interp(cmd_times, measured_times, measured_velocities)
             
             vm.sysid_status = "3/4: Fitting model..."
-            fit_func = lambda t, K, tau: self._simulate_first_order_response(t, K, tau, cmd_torques)
-            params, _ = curve_fit(fit_func, cmd_times, aligned_velocities, p0=[10.0, 0.05])
-            K, tau = params
             
+            fit_func = lambda t, K, tau, delay: self._simulate_fopdt_response(t, K, tau, delay, cmd_torques)
+            
+            initial_guesses = [10.0, 0.05, 0.005]
+            bounds = ([0, 0, 0], [1000, 1, 0.1])
+            
+            params, _ = curve_fit(fit_func, cmd_times, aligned_velocities, p0=initial_guesses, bounds=bounds, maxfev=5000)
+            
+            K_v, tau, delay = params
+
+            if delay < 0:
+                print(f"Warning: Calculated negative delay ({delay:.4f}s). Clamping to 0.")
+                delay = 0
+
             vm.sysid_status = "4/4: Calculating gains..."
-            lmbda = config["lambda_tc"]
-            kp = tau / (K * lmbda)
-            ki = 1.0 / (K * lmbda)
+
+            lambda_tc = config.get("lambda_tc", 0.1)
             
-            vm.sysid_results = {"K": K, "tau": tau, "p": kp, "i": ki}
-            vm.sysid_status = "Done! Gains ready."
+            Kp = (1 / K_v) * (tau / (lambda_tc + delay))
+            Ti = tau
+            Ki = Kp / Ti if Ti > 0 else 0
+            
+            if not math.isfinite(Kp) or not math.isfinite(Ki) or Kp <= 0 or Ki <= 0:
+                raise ValueError(f"Resulted in invalid gains: P={Kp:.2f}, I={Ki:.2f}")
+
+            vm.sysid_results = {"K": K_v, "tau": tau, "delay": delay, "p": Kp, "i": Ki}
+            vm.sysid_status = "Done! Gains ready to apply."
 
         except Exception as e:
             vm.log_message(f"SysID ERROR: {e}")

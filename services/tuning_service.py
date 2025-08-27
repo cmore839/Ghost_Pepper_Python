@@ -34,6 +34,12 @@ class TuningService:
             vm.send_control_mode_to_motor(motor_id, "Torque")
             time.sleep(0.2)
 
+            # --- ADD THIS: Clear the gui_target stream ---
+            gui_target_stream = vm._data_service.get_stream_data("gui_target")
+            gui_target_stream["timestamps"].clear()
+            gui_target_stream["values"].clear()
+            # --- END ADD ---
+
             relay_data = []
             start_time = time.time()
             last_output = 0
@@ -106,6 +112,12 @@ class TuningService:
             stream_key = f"motor_{motor_id}_current_q"
             vm._data_service.get_stream_data(stream_key)["timestamps"].clear()
             vm._data_service.get_stream_data(stream_key)["values"].clear()
+            
+            # --- ADD THIS: Clear the gui_target stream ---
+            gui_target_stream = vm._data_service.get_stream_data("gui_target")
+            gui_target_stream["timestamps"].clear()
+            gui_target_stream["values"].clear()
+            # --- END ADD ---
             
             vm.log_message("Current Test: Starting...")
             vm.send_control_mode_to_motor(motor_id, "Torque")

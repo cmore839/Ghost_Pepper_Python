@@ -12,6 +12,8 @@ from services.winder_service import WinderService
 from services.gearing_service import GearingService
 from services.sysid_tuner_service import SysIdTunerService
 from services.characterization_service import CharacterizationService
+from services.performance_service import PerformanceService
+from services.analysis_service import AnalysisService
 from models.motor import Motor
 from models.plot_config import PlotConfig, SeriesConfig
 from config import *
@@ -22,12 +24,14 @@ class MainViewModel:
         # Services
         self._can_service = CanService()
         self._data_service = DataService()
+        self._analysis_service = AnalysisService()
         self._motor_service = MotorService(self._can_service, self._data_service)
         self._tuning_service = TuningService(self)
         self._winder_service = WinderService(self)
         self._gearing_service = GearingService(self)
         self._sysid_tuner_service = SysIdTunerService(self)
         self._characterization_service = CharacterizationService(self)
+        self._performance_service = PerformanceService(self)
         
         self.ui_manager = UIManager(self)
 
@@ -48,7 +52,14 @@ class MainViewModel:
 
         # Data Rate Tracking
         self.telemetry_packet_counter = 0
+        self.plot_update_counter = 0
         self.last_freq_calc_time = 0
+        self.telemetry_rate_hz = 0.0
+        self.plot_rate_fps = 0.0
+        
+        # Telemetry Rate Synchronization
+        self.active_telemetry_rate_hz = 100.0
+        self.last_gui_target_update_time = 0
 
         # Autotuning State
         self.autotune_active = False
@@ -74,6 +85,9 @@ class MainViewModel:
         self.winder_config = {}
         self.winder_dynamic = {}
         
+        # Performance Test State
+        self.performance_test_results = None
+
         self._data_service.register_stream("gui_target")
         self._previous_gui_target = 0.0
         self.log_message("Welcome! Connect to the CAN bus to begin.")
@@ -119,10 +133,13 @@ class MainViewModel:
             self.tuning_recommendations = None 
             self.log_message(f"Selected motor {motor_id}")
             if self.active_motor_id is not None:
+                self.active_telemetry_rate_hz = 100.0
+                if dpg.does_item_exist("telemetry_rate_selector"):
+                    dpg.set_value("telemetry_rate_selector", "100 Hz")
+                
                 self.request_motor_params(self.active_motor_id)
                 self._motor_service.request_parameter(self.active_motor_id, REG_STATUS)
                 self.ui_manager.update_can_id_input(self.active_motor_id)
-
         except (ValueError, TypeError):
             self.active_motor_id = None
             self.active_motor = None
@@ -165,10 +182,6 @@ class MainViewModel:
     def set_target(self, target_value):
         target = float(target_value)
         self.send_target_to_motor(self.active_motor_id, target)
-        
-        now = time.time()
-        self._data_service.add_data_point("gui_target", now - 0.001, self._previous_gui_target)
-        self._data_service.add_data_point("gui_target", now, target)
         self._previous_gui_target = target
 
     def set_motor_parameter_float(self, register, value):
@@ -200,11 +213,9 @@ class MainViewModel:
                 if not (1 <= new_id <= 127):
                     self.log_message("ERROR: CAN ID must be between 1 and 127.")
                     return
-
                 self.log_message(f"Sending command to motor {self.active_motor_id} to set new ID to {new_id} and restart.")
                 self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_SET_ID_AND_RESTART, new_id, 'b')
                 self.log_message("Command sent. The motor should restart with the new ID. Please re-scan for motors after a moment.")
-
             except Exception as e:
                 self.log_message(f"Error during set and restart sequence: {e}")
 
@@ -224,7 +235,17 @@ class MainViewModel:
             time.sleep(0.05)
 
     def update(self):
+        now = time.time()
         if self.is_connected:
+            # --- SIMPLIFIED FIX for Staircasing ---
+            # Use a timer to add a gui_target point at the same rate as the motor telemetry.
+            # This ensures a continuous, smooth line instead of steps.
+            period = 1.0 / self.active_telemetry_rate_hz if self.active_telemetry_rate_hz > 0 else 0.01
+            if now - self.last_gui_target_update_time >= period:
+                self._data_service.add_data_point("gui_target", now, self._previous_gui_target)
+                self.last_gui_target_update_time = now
+            # --- END FIX ---
+
             message_queue = self._can_service.get_message_queue()
             try:
                 while not message_queue.empty():
@@ -261,13 +282,14 @@ class MainViewModel:
                             self.active_motor.phase_inductance = data['L']
                         self.ui_manager.update_parameter_widgets(REG_PHASE_RESISTANCE, data['R'])
                         self.ui_manager.update_parameter_widgets(REG_INDUCTANCE, data['L'])
-
             except queue.Empty: pass
         
-        now = time.time()
         if now - self.last_freq_calc_time > 1.0:
-            self.ui_manager.update_data_rate_display(self.telemetry_packet_counter)
+            self.telemetry_rate_hz = self.telemetry_packet_counter
+            self.plot_rate_fps = self.plot_update_counter
+            self.ui_manager.update_data_rate_display(self.telemetry_rate_hz, self.plot_rate_fps)
             self.telemetry_packet_counter = 0
+            self.plot_update_counter = 0
             self.last_freq_calc_time = now
 
         if self.active_motor_id not in [m.id for m in self.motors]: self.select_motor(None)
@@ -287,7 +309,6 @@ class MainViewModel:
         except (ValueError, TypeError):
             self.log_message("ERROR: Invalid motor ID or ratio for gearing.")
 
-    # NEW: Function to start the drive-by-wire mode
     def start_drive_by_wire(self, leader_id_str, follower_id_str, ratio_str):
         try:
             leader_id = int(leader_id_str)
@@ -299,7 +320,6 @@ class MainViewModel:
             self._gearing_service.start(leader_id, follower_id, ratio, mode="drive_by_wire")
         except (ValueError, TypeError):
             self.log_message("ERROR: Invalid motor ID or ratio for drive-by-wire.")
-
 
     def stop_gearing(self):
         self._gearing_service.stop()
@@ -323,8 +343,8 @@ class MainViewModel:
             i_gain = self.autotune_results["i"]
             self.send_pid_gain_to_motor(self.active_motor_id, REG_VEL_PID_P, p_gain)
             self.send_pid_gain_to_motor(self.active_motor_id, REG_VEL_PID_I, i_gain)
-            self.ui_manager.update_pid_sliders(REG_VEL_PID_P, p_gain)
-            self.ui_manager.update_pid_sliders(REG_VEL_PID_I, i_gain)
+            self.ui_manager.update_parameter_widgets(REG_VEL_PID_P, p_gain)
+            self.ui_manager.update_parameter_widgets(REG_VEL_PID_I, i_gain)
     
     def calculate_and_apply_bandwidth_gains(self, bandwidth_hz):
         if self.active_motor is None:
@@ -342,19 +362,22 @@ class MainViewModel:
             bw_rads = float(bandwidth_hz) * 2 * math.pi
             p_gain = motor_l * bw_rads
             i_gain = motor_r * bw_rads
+            lpf_hz = float(bandwidth_hz) * 5
+            lpf_t = 1.0 / (2 * math.pi * lpf_hz) if lpf_hz > 0 else 0.0
             
-            self.log_message(f"Applying Current Gains from BW ({bandwidth_hz} Hz): P={p_gain:.4f}, I={i_gain:.4f}")
-
+            self.log_message(f"Applying Current Gains from BW ({bandwidth_hz} Hz): P={p_gain:.4f}, I={i_gain:.4f}, LPF={lpf_t*1000:.2f}ms")
             self.send_pid_gain_to_motor(self.active_motor_id, REG_CURQ_PID_P, p_gain)
             self.send_pid_gain_to_motor(self.active_motor_id, REG_CURQ_PID_I, i_gain)
             self.send_pid_gain_to_motor(self.active_motor_id, REG_CURD_PID_P, p_gain)
             self.send_pid_gain_to_motor(self.active_motor_id, REG_CURD_PID_I, i_gain)
-            
+            self.set_motor_parameter_float(REG_CURQ_LPF_T, lpf_t)
+            self.set_motor_parameter_float(REG_CURD_LPF_T, lpf_t)
             self.ui_manager.update_parameter_widgets(REG_CURQ_PID_P, p_gain)
             self.ui_manager.update_parameter_widgets(REG_CURQ_PID_I, i_gain)
             self.ui_manager.update_parameter_widgets(REG_CURD_PID_P, p_gain)
             self.ui_manager.update_parameter_widgets(REG_CURD_PID_I, i_gain)
-
+            self.ui_manager.update_parameter_widgets(REG_CURQ_LPF_T, lpf_t)
+            self.ui_manager.update_parameter_widgets(REG_CURD_LPF_T, lpf_t)
         except Exception as e:
             self.log_message(f"Error applying bandwidth gains: {e}")
             
@@ -373,6 +396,7 @@ class MainViewModel:
         if self.active_motor_id is None: return
         try:
             freq_hz = int(rate_str.replace(" Hz", ""))
+            self.active_telemetry_rate_hz = float(freq_hz)
             period_us = int(1_000_000 / freq_hz) if freq_hz > 0 else 0
             self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_TELEMETRY_PERIOD, period_us, 'L')
         except ValueError:
@@ -439,19 +463,15 @@ class MainViewModel:
         if self.active_motor is None:
             self.log_message("ERROR: No active motor selected.")
             return
-
         motor_r = self.active_motor.phase_resistance
         motor_l = self.active_motor.phase_inductance
-
         if motor_r <= 0 or motor_l <= 0:
             self.log_message("ERROR: Motor phase resistance and inductance must be known and positive.")
             self.tuning_recommendations = None
             return
-
         tau_e = motor_l / motor_r
         reco_bw = (1 / tau_e) / 10 
         aggression = dpg.get_value("reco_aggression")
-
         self.tuning_recommendations = {
             "electrical_time_constant_ms": tau_e * 1000,
             "recommended_current_bw": reco_bw * aggression,
@@ -465,22 +485,17 @@ class MainViewModel:
         if not self.tuning_recommendations or self.active_motor_id is None:
             self.log_message("ERROR: No recommendations to apply.")
             return
-            
         recs = self.tuning_recommendations
         self.log_message("Applying recommended safe gains for smooth start.")
-        
         bw = recs['recommended_current_bw']
         self.calculate_and_apply_bandwidth_gains(bw)
         dpg.set_value("current_bw_input", bw)
-
         vel_p = recs['recommended_vel_p']
         self.send_pid_gain_to_motor(self.active_motor_id, REG_VEL_PID_P, vel_p)
         self.ui_manager.update_parameter_widgets(REG_VEL_PID_P, vel_p)
-
         vel_i = recs['recommended_vel_i']
         self.send_pid_gain_to_motor(self.active_motor_id, REG_VEL_PID_I, vel_i)
         self.ui_manager.update_parameter_widgets(REG_VEL_PID_I, vel_i)
-
         angle_p = recs['recommended_angle_p']
         self.send_pid_gain_to_motor(self.active_motor_id, REG_ANG_PID_P, angle_p)
         self.ui_manager.update_parameter_widgets(REG_ANG_PID_P, angle_p)
@@ -499,7 +514,6 @@ class MainViewModel:
         if name in self.get_available_data_keys():
             self.log_message(f"ERROR: A signal named '{name}' already exists.")
             return
-
         self._data_service.register_calculated_stream(name, "subtract", [key1, key2])
         self.log_message(f"Created new signal '{name}' = {key1} - {key2}")
         self.ui_manager.rebuild_dynamic_ui()
@@ -512,8 +526,32 @@ class MainViewModel:
         if name in self.get_available_data_keys():
             self.log_message(f"ERROR: A signal named '{name}' already exists.")
             return
-            
         self._data_service.register_calculated_stream(name, "differentiate", [key])
         self.log_message(f"Created new signal '{name}' = d/dt({key})")
         self.ui_manager.rebuild_dynamic_ui()
         self.ui_manager.close_popups()
+        
+    def start_performance_test(self, test_type):
+        """Starts a performance analysis test."""
+        if self.active_motor_id is None:
+            self.log_message("ERROR: No motor selected for performance test.")
+            return
+
+        config = {}
+        if test_type == "step_response":
+            config = {
+                "amplitude": dpg.get_value("perf_step_amp"),
+                "duration": dpg.get_value("perf_step_dur")
+            }
+        elif test_type == "constant_velocity":
+            config = {
+                "distance": dpg.get_value("perf_velo_dist"),
+                "velocity": dpg.get_value("perf_velo_speed")
+            }
+        elif test_type == "reversing_move":
+            config = {
+                "distance": dpg.get_value("perf_rev_dist"),
+                "velocity": dpg.get_value("perf_rev_speed")
+            }
+        
+        self._performance_service.start_test(test_type, config)

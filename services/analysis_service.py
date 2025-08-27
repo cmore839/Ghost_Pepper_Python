@@ -2,57 +2,84 @@
 import numpy as np
 
 class AnalysisService:
-    """
-    Contains functions to analyze system responses, such as a step response.
-    """
-    def analyze_step_response(self, timestamps, data, step_value):
-        """
-        Calculates key performance indicators for a step response.
-
-        Returns:
-            A dictionary containing rise_time, overshoot, and settling_time.
-        """
-        if len(timestamps) < 2 or step_value == 0:
-            return {"rise_time": 0, "overshoot": 0, "settling_time": 0, "peak_time": 0}
-
-        timestamps = np.array(timestamps) - timestamps[0]
-        data = np.array(data)
-
-        # --- Rise Time (10% to 90%) ---
+    def analyze_step_response(self, timestamps, values, amplitude):
+        if len(timestamps) < 2:
+            return {'error': 'Not enough data'}
+        
+        t = np.array(timestamps)
+        y = np.array(values)
+        
         try:
-            ten_percent_val = step_value * 0.1
-            ninety_percent_val = step_value * 0.9
-            t10 = timestamps[np.where(data >= ten_percent_val)[0][0]]
-            t90 = timestamps[np.where(data >= ninety_percent_val)[0][0]]
-            rise_time = t90 - t10
+            # Find the time where the response reaches 63.2% of its final value
+            tau_val = y[0] + 0.632 * (y[-1] - y[0])
+            tau_idx = np.where(y >= tau_val)[0][0]
+            tau = t[tau_idx] - t[0]
+            
+            # Estimate Rise Time (10% to 90%)
+            val_10 = y[0] + 0.1 * (y[-1] - y[0])
+            val_90 = y[0] + 0.9 * (y[-1] - y[0])
+            idx_10 = np.where(y >= val_10)[0][0]
+            idx_90 = np.where(y >= val_90)[0][0]
+            rise_time = (t[idx_90] - t[idx_10]) * 1000 # in ms
+
+            return {
+                "time_constant": tau,
+                "rise_time": rise_time
+            }
         except IndexError:
-            rise_time = -1 
+            return {'error': 'Could not determine response characteristics'}
 
-        # --- Overshoot and Peak Time ---
-        peak_index = np.argmax(data)
-        peak_time = timestamps[peak_index]
-        max_val = data[peak_index]
-        overshoot = ((max_val - step_value) / step_value) * 100 if max_val > step_value else 0
+    def analyze_step_response_performance(self, target_data, actual_data, final_value):
+        """Analyzes a step response for overshoot, rise time, and settling time."""
+        if len(actual_data['values']) < 20:
+            return {"error": "Not enough data for analysis."}
 
-        # --- Settling Time (within +/- 5% of step_value) ---
+        times = np.array(actual_data['timestamps'])
+        values = np.array(actual_data['values'])
+        start_value = values[0]
+        
+        peak_value = np.max(values)
+        overshoot = ((peak_value - final_value) / (final_value - start_value)) * 100 if final_value != start_value else 0
+        
+        ten_percent_val = start_value + 0.1 * (final_value - start_value)
+        ninety_percent_val = start_value + 0.9 * (final_value - start_value)
+        
         try:
-            settling_band_upper = step_value * 1.05
-            settling_band_lower = step_value * 0.95
-            
-            outside_band_indices = np.where((data > settling_band_upper) | (data < settling_band_lower))[0]
-            
-            if len(outside_band_indices) > 0:
-                last_outside_time = timestamps[outside_band_indices[-1]]
-                settling_time = last_outside_time
-            else: 
-                settling_time = timestamps[-1]
-                
+            time_at_10 = times[np.where(values >= ten_percent_val)[0][0]]
+            time_at_90 = times[np.where(values >= ninety_percent_val)[0][0]]
+            rise_time = time_at_90 - time_at_10
         except IndexError:
-            settling_time = -1
+            rise_time = -1
+
+        tolerance = 0.02 * abs(final_value - start_value)
+        unsettled_indices = np.where(np.abs(values - final_value) > tolerance)[0]
+        
+        settling_time = times[unsettled_indices[-1]] - times[0] if len(unsettled_indices) > 0 else 0
 
         return {
-            "rise_time": rise_time,
-            "overshoot": overshoot,
-            "settling_time": settling_time,
-            "peak_time": peak_time
+            "Overshoot (%)": f"{overshoot:.2f}",
+            "Rise Time (ms)": f"{rise_time * 1000:.2f}" if rise_time != -1 else "N/A",
+            "Settling Time (ms)": f"{settling_time * 1000:.2f}"
+        }
+
+    def analyze_tracking_error(self, target_data, actual_data):
+        """Calculates tracking error statistics between two signals."""
+        if len(target_data['values']) < 20 or len(actual_data['values']) < 20:
+            return {"error": "Not enough data for analysis."}
+            
+        target_times = np.array(target_data['timestamps'])
+        target_values = np.array(target_data['values'])
+        actual_times = np.array(actual_data['timestamps'])
+        actual_values = np.array(actual_data['values'])
+        
+        interp_actual_values = np.interp(target_times, actual_times, actual_values)
+        
+        error = target_values - interp_actual_values
+        
+        rms_error = np.sqrt(np.mean(error**2))
+        peak_error = np.max(np.abs(error))
+        
+        return {
+            "RMS Tracking Error (rad)": f"{rms_error:.4f}",
+            "Peak Tracking Error (rad)": f"{peak_error:.4f}"
         }

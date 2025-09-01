@@ -1,15 +1,20 @@
 # config.py
+
+# --- CAN Service ---
 CAN_INTERFACE = 'socketcan'
 CAN_CHANNEL = 'can0'
-CAN_BITRATE = 500000
+CAN_BITRATE = 500000 # Restored to your original value
 
 # --- CAN IDs ---
 CAN_ID_COMMAND_BASE = 0x000
+CAN_ID_MOTION_COMMAND_BASE = 0x100       # NEW
 CAN_ID_TELEMETRY_BASE = 0x200
 CAN_ID_RESPONSE_BASE = 0x300
+CAN_ID_STATUS_FEEDBACK_BASE = 0x400    # NEW
 CAN_ID_SCAN_BROADCAST = 0x700
+CAN_ID_SYNC = 0x080                      # NEW
 
-# --- Official SimpleFOC Register Map ---
+# --- Official SimpleFOC Register Map (from your working file) ---
 REG_STATUS = 0x00
 REG_TARGET = 0x01
 REG_ENABLE = 0x04
@@ -54,4 +59,5 @@ REG_CUSTOM_SAVE_TO_EEPROM        = 0xE1
 REG_CUSTOM_FLIP_SENSOR_DIR       = 0xE2
 REG_CUSTOM_TELEMETRY_PERIOD      = 0xE3
 REG_CUSTOM_CHARACTERIZE_MOTOR    = 0xE4
-REG_CUSTOM_SET_ID_AND_RESTART    = 0xE5 # NEW: Single command for the entire operation
+REG_CUSTOM_SET_ID_AND_RESTART    = 0xE5
+REG_CUSTOM_MOTION_COMMAND        = 0xE6 # NEW

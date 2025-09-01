@@ -9,17 +9,37 @@ class UIManager:
         self._ui_needs_rebuild = False
 
     def create_all_ui_panels(self):
-        self._create_motor_management_panel()
-        self._create_motor_limits_panel()
-        self._create_motor_params_panel()
-        self._create_real_time_control_panel()
-        self._create_pid_tuning_panel()
-        self._create_winder_panel()
-        self._create_gearing_panel() 
-        self._create_advanced_tuning_panel()
-        self._create_performance_panel() # New Panel Added Here
-        self._create_plot_manager_panel()
-        self._create_general_settings_panel()
+        # The main window now has the correct tag for the set_primary_window call in main.py
+        with dpg.window(tag="primary_window"):
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Connect/Disconnect", callback=self._viewmodel.connect_disconnect)
+                dpg.add_button(label="Scan", callback=self._viewmodel.scan_for_motors)
+                dpg.add_combo(tag="motor_selector", label="Active Motor", items=[], width=150, callback=lambda s, a, u: self._viewmodel.select_motor(s, a, None))
+            
+            dpg.add_separator()
+
+            # --- CORRECTED LAYOUT ---
+            # Using a horizontal group for a stable two-column layout instead of add_same_line()
+            with dpg.group(horizontal=True):
+                # --- Left Panel ---
+                with dpg.child_window(width=400, tag="left_panel"):
+                    self._create_motor_management_panel()
+                    self._create_motor_limits_panel()
+                    self._create_motor_params_panel()
+                    self._create_real_time_control_panel()
+                    self._create_real_time_sync_panel() # New Panel
+                    self._create_pid_tuning_panel()
+                    self._create_winder_panel()
+                    self._create_gearing_panel() 
+                    self._create_advanced_tuning_panel()
+                    self._create_performance_panel()
+                    self._create_plot_manager_panel()
+                    self._create_general_settings_panel()
+                
+                # --- Right Panel ---
+                with dpg.group(tag="right_panel"):
+                    self.create_plots_area(parent="right_panel")
+                    self._create_log_panel()
 
     def rebuild_dynamic_ui(self):
         self._ui_needs_rebuild = True
@@ -33,17 +53,29 @@ class UIManager:
             
             self._build_plot_manager_content(parent="plot_manager_content")
             self._build_plots_area_content(parent="plots_area_content")
+
+            # --- FIX: Moved this logic inside the rebuild block ---
+            if dpg.does_item_exist("sync_motor_list_window"):
+                dpg.delete_item("sync_motor_list_window", children_only=True)
+                motor_ids_str = [f"Motor {m.id}" for m in self._viewmodel.motors]
+                for motor_str in motor_ids_str:
+                    dpg.add_selectable(label=motor_str, parent="sync_motor_list_window", tag=f"selectable_{motor_str}")
+            # --- END FIX ---
             
             self._ui_needs_rebuild = False
         
         # --- Start of Frequent UI Updates ---
-        motor_ids = [str(m.id) for m in self._viewmodel.motors]
+        motor_ids_str = [f"Motor {m.id}" for m in self._viewmodel.motors]
+        
+        if dpg.does_item_exist("motor_selector"):
+            dpg.configure_item("motor_selector", items=motor_ids_str)
+        
         if dpg.does_item_exist("gearing_leader_selector"):
-            dpg.configure_item("gearing_leader_selector", items=motor_ids)
-            dpg.configure_item("gearing_follower_selector", items=motor_ids)
+            dpg.configure_item("gearing_leader_selector", items=motor_ids_str)
+            dpg.configure_item("gearing_follower_selector", items=motor_ids_str)
         if dpg.does_item_exist("winder_bobbin_selector"):
-            dpg.configure_item("winder_bobbin_selector", items=motor_ids)
-            dpg.configure_item("winder_tension_selector", items=motor_ids)
+            dpg.configure_item("winder_bobbin_selector", items=motor_ids_str)
+            dpg.configure_item("winder_tension_selector", items=motor_ids_str)
             
         if dpg.does_item_exist("gearing_status_group"):
             dpg.delete_item("gearing_status_group", children_only=True)
@@ -97,8 +129,16 @@ class UIManager:
             dpg.set_value("characterization_status_text", self._viewmodel.characterization_status)
             dpg.configure_item("characterize_start_btn", enabled=not self._viewmodel._characterization_service.is_active)
         
-        # New call to update performance results
         self.update_performance_results_ui()
+
+        if self._viewmodel.active_motor:
+            state_map = {0: "INITIALIZING", 1: "READY", 2: "OPERATIONAL", 3: "FAULT"}
+            if dpg.does_item_exist("status_state_text"):
+                dpg.set_value("status_state_text", state_map.get(self._viewmodel.active_motor.state, "UNKNOWN"))
+            if dpg.does_item_exist("status_pos_text"):
+                dpg.set_value("status_pos_text", f"{self._viewmodel.active_motor.status_angle:.4f}")
+            if dpg.does_item_exist("status_vel_text"):
+                dpg.set_value("status_vel_text", f"{self._viewmodel.active_motor.status_velocity:.4f}")
 
     def _create_motor_management_panel(self):
         with dpg.collapsing_header(label="Device Configuration", default_open=False):
@@ -161,7 +201,7 @@ class UIManager:
                                         user_data=REG_KV)
 
     def _create_real_time_control_panel(self):
-        with dpg.collapsing_header(label="Real-Time Control", default_open=False):
+        with dpg.collapsing_header(label="Manual Control", default_open=True):
             with dpg.table(header_row=False):
                 dpg.add_table_column(width_fixed=True)
                 dpg.add_table_column(width_stretch=True)
@@ -188,6 +228,46 @@ class UIManager:
                 with dpg.table_row():
                     dpg.add_text("Current Iq:")
                     dpg.add_text("--", tag="live_iq_text")
+
+    def _create_real_time_sync_panel(self):
+        with dpg.collapsing_header(label="Synchronized Motion Control", default_open=True):
+            dpg.add_text("Plan and execute a trapezoidal motion profile.")
+
+            dpg.add_text("Motors to include in Synchronized Move (Ctrl+Click for multiple):")
+            dpg.add_child_window(tag="sync_motor_list_window", height=120, border=True)
+                
+            with dpg.table(header_row=False):
+                dpg.add_table_column(width_fixed=True)
+                dpg.add_table_column(width_stretch=True)
+                with dpg.table_row():
+                    dpg.add_text("Target Position (rad)")
+                    dpg.add_input_float(tag="pos_cmd_input", default_value=6.28, width=-1)
+                with dpg.table_row():
+                    dpg.add_text("Max Velocity (rad/s)")
+                    dpg.add_input_float(tag="vel_cmd_input", default_value=10.0, width=-1)
+                with dpg.table_row():
+                    dpg.add_text("Max Accel (rad/s^2)")
+                    dpg.add_input_float(tag="acc_cmd_input", default_value=50.0, width=-1)
+            
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Plan and Execute Move", width=190, callback=self._viewmodel.plan_and_execute_trajectory)
+                dpg.add_button(label="Broadcast SYNC", width=190, callback=self._viewmodel.send_sync)
+            
+            dpg.add_separator()
+            dpg.add_text("Status Feedback (from selected motor):")
+
+            with dpg.table(header_row=False):
+                dpg.add_table_column(width_fixed=True)
+                dpg.add_table_column(width_stretch=True)
+                with dpg.table_row():
+                    dpg.add_text("Actual Position:")
+                    dpg.add_text("0.0", tag="status_pos_text")
+                with dpg.table_row():
+                    dpg.add_text("Actual Velocity:")
+                    dpg.add_text("0.0", tag="status_vel_text")
+                with dpg.table_row():
+                    dpg.add_text("Motor State:")
+                    dpg.add_text("UNKNOWN", tag="status_state_text")
 
     def _create_pid_tuning_panel(self):
         with dpg.collapsing_header(label="PID Tuning", default_open=False):
@@ -305,8 +385,8 @@ class UIManager:
             def start_winder_callback():
                 try:
                     config = {
-                        "bobbin_id": int(dpg.get_value("winder_bobbin_selector")),
-                        "tension_id": int(dpg.get_value("winder_tension_selector")),
+                        "bobbin_id": int(dpg.get_value("winder_bobbin_selector").split(" ")[1]),
+                        "tension_id": int(dpg.get_value("winder_tension_selector").split(" ")[1]),
                         "revolutions": dpg.get_value("winder_revs"),
                         "speed": dpg.get_value("winder_speed"),
                         "accel": dpg.get_value("winder_accel"),
@@ -314,7 +394,7 @@ class UIManager:
                         "holding_torque": dpg.get_value("winder_holding_torque"),
                     }
                     self._viewmodel.start_or_resume_winder(config)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, IndexError):
                     self._viewmodel.winder_status = "Error: Select motors"
 
             dpg.add_separator()
@@ -347,14 +427,14 @@ class UIManager:
                     dpg.add_input_float(tag="gearing_follower_ratio", default_value=-1.0, width=-1)
             
             def start_gearing_callback():
-                leader_id = dpg.get_value("gearing_leader_selector")
-                follower_id = dpg.get_value("gearing_follower_selector")
+                leader_id = dpg.get_value("gearing_leader_selector").split(" ")[1]
+                follower_id = dpg.get_value("gearing_follower_selector").split(" ")[1]
                 ratio = dpg.get_value("gearing_follower_ratio")
                 self._viewmodel.start_gearing(leader_id, follower_id, ratio)
                 
             def start_drive_by_wire_callback():
-                leader_id = dpg.get_value("gearing_leader_selector")
-                follower_id = dpg.get_value("gearing_follower_selector")
+                leader_id = dpg.get_value("gearing_leader_selector").split(" ")[1]
+                follower_id = dpg.get_value("gearing_follower_selector").split(" ")[1]
                 ratio = dpg.get_value("gearing_follower_ratio")
                 self._viewmodel.start_drive_by_wire(leader_id, follower_id, ratio)
 

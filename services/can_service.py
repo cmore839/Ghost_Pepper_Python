@@ -2,7 +2,7 @@
 import can
 import queue
 import threading
-from config import CAN_INTERFACE, CAN_CHANNEL, CAN_BITRATE, CAN_ID_TELEMETRY_BASE, CAN_ID_RESPONSE_BASE
+from config import CAN_INTERFACE, CAN_CHANNEL, CAN_BITRATE, CAN_ID_TELEMETRY_BASE, CAN_ID_RESPONSE_BASE, CAN_ID_STATUS_FEEDBACK_BASE
 
 class CanService:
     def __init__(self):
@@ -13,7 +13,11 @@ class CanService:
 
     def connect(self):
         try:
-            can_filters = [{"can_id": CAN_ID_TELEMETRY_BASE, "can_mask": 0x780}, {"can_id": CAN_ID_RESPONSE_BASE, "can_mask": 0x700}]
+            can_filters = [
+                {"can_id": CAN_ID_TELEMETRY_BASE, "can_mask": 0x780}, 
+                {"can_id": CAN_ID_RESPONSE_BASE, "can_mask": 0x700},
+                {"can_id": CAN_ID_STATUS_FEEDBACK_BASE, "can_mask": 0x700}
+            ]
             self._bus = can.interface.Bus(interface=CAN_INTERFACE, channel=CAN_CHANNEL, bitrate=CAN_BITRATE, can_filters=can_filters)
             self._is_running = True
             self._read_thread = threading.Thread(target=self._read_messages, daemon=True)

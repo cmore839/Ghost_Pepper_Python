@@ -14,7 +14,8 @@ def main():
 
     dpg.setup_dearpygui()
     dpg.show_viewport()
-    dpg.set_primary_window("main_window", True)
+    # Corrected: Use "primary_window" to match the tag in UIManager
+    dpg.set_primary_window("primary_window", True)
     
     last_render_time = time.time()
     render_interval = 1.0 / 60.0

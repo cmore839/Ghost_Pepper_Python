@@ -1,13 +1,18 @@
 # models/motor.py
-from dataclasses import dataclass
-
-@dataclass
 class Motor:
-    """Represents a discovered motor's LIVE properties."""
-    id: int
-    angle: float = 0.0
-    velocity: float = 0.0
-    current_q: float = 0.0
-    phase_resistance: float = 0.0
-    phase_inductance: float = 0.0
-    is_enabled: bool = False # NEW: Added to track the motor's enabled state
+    def __init__(self, id):
+        self.id = id
+        self.angle = 0.0
+        self.velocity = 0.0
+        self.current_q = 0.0
+        self.is_enabled = False
+        
+        # Attributes for real-time status feedback
+        self.status_angle = 0.0
+        self.status_velocity = 0.0
+        self.state = 0 # 0: INITIALIZING, 1: READY, 2: OPERATIONAL, 3: FAULT
+
+        # Existing parameter storage
+        self.phase_resistance = 0.0
+        self.phase_inductance = 0.0
+        self.parameters = {}

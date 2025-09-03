@@ -1,0 +1,5 @@
+dearpygui
+python-can
+pluggy
+numpy
+scipy

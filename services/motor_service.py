@@ -84,7 +84,6 @@ class MotorService:
         except (struct.error):
             return None
 
-
     def send_command(self, motor_id, register, value, fmt):
         if motor_id is None: return
         command_id = CAN_ID_COMMAND_BASE + motor_id
@@ -96,29 +95,34 @@ class MotorService:
         else: return
         message = can.Message(arbitration_id=command_id, data=data, is_extended_id=False)
         self._can_service.send_message(message)
-
-    def send_motion_command(self, motor_id, pos, vel, acc):
-        # Prepare the data payload with new scaling factors
+    
+    def send_trajectory_command(self, motor_id, pos, vel, acc):
+        """
+        Sends a trajectory command using the dedicated motion command CAN ID.
+        This sends an 8-byte message, which is the maximum for a standard CAN frame.
+        """
+        # The firmware expects the data scaled and packed in a specific format:
+        # 32-bit integer for position, 16-bit for velocity, 16-bit for acceleration.
         pos_raw = int(pos * 10000.0)
-        # --- FIX: New scaling factor for velocity ---
         vel_raw = int(vel * 100.0)
-        # --- FIX: New scaling factor for acceleration ---
         acc_raw = int(acc * 10.0)
 
+        # Pack the data as '<ihh' (signed int, signed short, signed short) which is 4 + 2 + 2 = 8 bytes.
+        data = struct.pack('<ihh', pos_raw, vel_raw, acc_raw)
+
         try:
-            # --- FIX: Revert to 8-byte packet structure ---
-            data = struct.pack('<ihh', pos_raw, vel_raw, acc_raw)
-            
-            # The 'dlc' is no longer needed as 8 bytes is the default
+            # Use the DEDICATED CAN ID for motion commands, not the general one.
+            # This ID is specifically for our 8-byte trajectory message.
             message = can.Message(
                 arbitration_id=(CAN_ID_MOTION_COMMAND_BASE + motor_id),
-                data=data,
-                is_extended_id=False
+                data=list(data),
+                is_extended_id=False,
+                dlc=8  # Data Length Code must be 8
             )
             self._can_service.send_message(message)
         except Exception as e:
-            print(f"Error sending motion command: {e}")
-            
+            print(f"Error sending trajectory command: {e}")
+
     def request_parameter(self, motor_id, register):
         if motor_id is None: return
         command_id = CAN_ID_COMMAND_BASE + motor_id

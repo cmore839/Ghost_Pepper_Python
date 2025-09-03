@@ -45,12 +45,8 @@ class MainViewModel:
         self.start_time = time.time()
         self.sync_motors = []
         
-        # Trajectory Planner State
+        # This flag now simply prevents sending new commands while a move is active
         self.is_moving = False
-        self.trajectory_points = []
-        self.trajectory_start_time = 0.0
-        self.trajectory_index = 0
-        self.trajectory_update_period = 1.0 / 500.0 # Send setpoints at
         
         # Plotting State
         self.the_plot = PlotConfig()
@@ -98,9 +94,6 @@ class MainViewModel:
         self.performance_test_results = None
 
         self._data_service.register_stream("gui_target")
-        self._data_service.register_stream("plan_pos")
-        self._data_service.register_stream("plan_vel")
-        self._data_service.register_stream("plan_acc")
         self._previous_gui_target = 0.0
         self.log_message("Welcome! Connect to the CAN bus to begin.")
 
@@ -110,10 +103,6 @@ class MainViewModel:
         if dpg.is_dearpygui_running():
             self.ui_manager.update_log()
     
-    def connect(self):
-        if not self.is_connected:
-            self.connect_disconnect()
-
     def connect_disconnect(self):
         if self.is_connected:
             self.stop_winder()
@@ -139,36 +128,39 @@ class MainViewModel:
             return
         self.log_message("Scanning for motors...")
         self.motors.clear()
+        self.ui_manager.rebuild_dynamic_ui() # Ensure UI rebuilds after clearing
         if self.is_connected: self._motor_service.scan_for_motors()
 
     def select_motor(self, sender, app_data, user_data):
-        if app_data is None:
+        if not app_data:
             self.active_motor_id = None
             self.active_motor = None
             self.tuning_recommendations = None
-            self.ui_manager.update_can_id_input(1)
+            if dpg.does_item_exist("new_can_id_input"):
+                dpg.set_value("new_can_id_input", 1)
             return
 
         try:
-            motor_id_str = app_data.replace("Motor ", "")
+            motor_id_str = app_data.split(" ")[1]
             motor_id = int(motor_id_str)
             self.active_motor_id = motor_id
             self.active_motor = self.get_motor_by_id(motor_id)
-            self.tuning_recommendations = None 
+            self.tuning_recommendations = None
             self.log_message(f"Selected motor {motor_id}")
             if self.active_motor_id is not None:
-                self.active_telemetry_rate_hz = 100.0
                 if dpg.does_item_exist("telemetry_rate_selector"):
                     dpg.set_value("telemetry_rate_selector", "100 Hz")
+                self.set_telemetry_rate("100 Hz")
                 
                 self.request_motor_params(self.active_motor_id)
                 self._motor_service.request_parameter(self.active_motor_id, REG_STATUS)
                 self.ui_manager.update_can_id_input(self.active_motor_id)
-        except (ValueError, TypeError):
+        except (ValueError, IndexError):
             self.active_motor_id = None
             self.active_motor = None
             self.tuning_recommendations = None
-            self.ui_manager.update_can_id_input(1)
+            if dpg.does_item_exist("new_can_id_input"):
+                dpg.set_value("new_can_id_input", 1)
 
     def get_motor_by_id(self, motor_id):
         return next((m for m in self.motors if m.id == motor_id), None)
@@ -184,11 +176,12 @@ class MainViewModel:
          self._motor_service.send_command(motor_id, register, float(value), 'f')
 
     def set_pid_gain(self, register, value):
-        self.send_pid_gain_to_motor(self.active_motor_id, register, value)
+        if self.active_motor_id is not None:
+            self.send_pid_gain_to_motor(self.active_motor_id, register, value)
 
     def enable_motor(self, enable):
-        if self.active_motor_id is None: return
-        self._motor_service.send_command(self.active_motor_id, REG_ENABLE, 1 if enable else 0, 'b')
+        if self.active_motor_id is not None:
+            self.enable_motor_by_id(self.active_motor_id, enable)
         
     def enable_motor_by_id(self, motor_id, enable):
         self._motor_service.send_command(motor_id, REG_ENABLE, 1 if enable else 0, 'b')
@@ -202,48 +195,47 @@ class MainViewModel:
         self.ui_manager.update_target_input(new_target)
 
     def set_target(self, target_value):
-        target = float(target_value)
-        self.send_target_to_motor(self.active_motor_id, target)
-        self._previous_gui_target = target
+        if self.active_motor_id is not None:
+            target = float(target_value)
+            self.send_target_to_motor(self.active_motor_id, target)
+            self._previous_gui_target = target
 
     def set_motor_parameter_float(self, register, value):
-        self._motor_service.send_command(self.active_motor_id, register, float(value), 'f')
+        if self.active_motor_id is not None:
+            self._motor_service.send_command(self.active_motor_id, register, float(value), 'f')
     
     def set_motor_parameter_byte(self, register, value):
-        self._motor_service.send_command(self.active_motor_id, register, int(value), 'b')
+        if self.active_motor_id is not None:
+            self._motor_service.send_command(self.active_motor_id, register, int(value), 'b')
 
     def flip_sensor_direction(self):
         if self.active_motor_id is None:
             self.log_message("ERROR: No motor selected.")
             return
         self.log_message(f"Sending Flip Sensor Direction command to motor {self.active_motor_id}...")
-        self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_FLIP_SENSOR_DIR, 1, 'b')
+        self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_FLIP_SENSOR_DIR, 0, 'none')
 
     def save_to_eeprom(self):
         if self.active_motor_id is None:
             self.log_message("ERROR: No motor selected.")
             return
         self.log_message(f"Sending Save to EEPROM command to motor {self.active_motor_id}...")
-        self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_SAVE_TO_EEPROM, 1, 'b')
+        self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_SAVE_TO_EEPROM, 0, 'none')
 
     def set_id_save_and_restart(self):
-            if self.active_motor_id is None:
-                self.log_message("ERROR: No motor selected.")
+        if self.active_motor_id is None:
+            self.log_message("ERROR: No motor selected.")
+            return
+        try:
+            new_id = dpg.get_value("new_can_id_input")
+            if not (1 <= new_id <= 127):
+                self.log_message("ERROR: CAN ID must be between 1 and 127.")
                 return
-            try:
-                new_id = dpg.get_value("new_can_id_input")
-                if not (1 <= new_id <= 127):
-                    self.log_message("ERROR: CAN ID must be between 1 and 127.")
-                    return
-                self.log_message(f"Sending command to motor {self.active_motor_id} to set new ID to {new_id} and restart.")
-                self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_SET_ID_AND_RESTART, new_id, 'b')
-                self.log_message("Command sent. The motor should restart with the new ID. Please re-scan for motors after a moment.")
-            except Exception as e:
-                self.log_message(f"Error during set and restart sequence: {e}")
-
-    def request_all_params(self):
-        if self.active_motor_id is not None:
-            self.request_motor_params(self.active_motor_id)
+            self.log_message(f"Sending command to motor {self.active_motor_id} to set new ID to {new_id} and restart.")
+            self._motor_service.send_command(self.active_motor_id, REG_CUSTOM_SET_ID_AND_RESTART, new_id, 'b')
+            self.log_message("Command sent. The motor should restart with the new ID. Please re-scan for motors after a moment.")
+        except Exception as e:
+            self.log_message(f"Error during set and restart sequence: {e}")
 
     def request_motor_params(self, motor_id):
         self.log_message(f"Requesting all parameters from motor {motor_id}...")
@@ -258,36 +250,10 @@ class MainViewModel:
         ]
         for param in params_to_request:
             self._motor_service.request_parameter(motor_id, param)
-            time.sleep(0.05)
+            time.sleep(0.02)
             
     def update(self):
         now = time.time()
-
-        # --- MODIFIED: This block now handles multiple motors ---
-        if self.is_moving and self.sync_motors: # Check against the new list
-            elapsed_time = now - self.trajectory_start_time
-            
-            if self.trajectory_index < len(self.trajectory_points):
-                if now >= self.trajectory_start_time + self.trajectory_points[self.trajectory_index][0]:
-                    pos_sp, vel_sp, acc_sp = self.trajectory_points[self.trajectory_index][1:]
-                    
-                    # Loop through all selected motors and send the command
-                    for motor in self.sync_motors:
-                        self._motor_service.send_motion_command(motor.id, pos_sp, vel_sp, acc_sp)
-
-                    self._data_service.add_data_point("plan_pos", now, pos_sp)
-                    self._data_service.add_data_point("plan_vel", now, vel_sp)
-                    self._data_service.add_data_point("plan_acc", now, acc_sp)
-                    self.trajectory_index += 1
-            else:
-                self.is_moving = False
-                self.log_message("Trajectory complete.")
-                final_pos = self.trajectory_points[-1][1]
-                # Send final position to all motors
-                for motor in self.sync_motors:
-                    self._motor_service.send_motion_command(motor.id, final_pos, 0.0, 0.0)
-        # --- END MODIFICATION ---
-
         if self.is_connected:
             period = 1.0 / self.active_telemetry_rate_hz if self.active_telemetry_rate_hz > 0 else 0.01
             if now - self.last_gui_target_update_time >= period:
@@ -312,14 +278,10 @@ class MainViewModel:
                         motor = self.get_motor_by_id(data['motor_id'])
                         if motor:
                             motor.angle, motor.velocity, motor.current_q = data['angle'], data['velocity'], data['current_q']
-                    
                     elif event_type == 'status_feedback':
                         motor = self.get_motor_by_id(data['motor_id'])
                         if motor:
-                            motor.status_angle = data['angle']
-                            motor.status_velocity = data['velocity']
-                            motor.state = data['state']
-                            
+                            motor.status_angle, motor.status_velocity, motor.state = data['angle'], data['velocity'], data['state']
                     elif event_type == 'param_response':
                         motor = self.get_motor_by_id(data['motor_id'])
                         if motor:
@@ -348,23 +310,21 @@ class MainViewModel:
             self.plot_update_counter = 0
             self.last_freq_calc_time = now
 
-        if self.active_motor_id not in [m.id for m in self.motors]: 
-            if self.active_motor_id is not None:
-                self.select_motor(None, None, None)
+        if self.active_motor_id is not None and self.active_motor_id not in [m.id for m in self.motors]:
+            self.select_motor(None, None, None)
 
     def disconnect(self):
-        if self.is_connected: self._can_service.disconnect()
+        if self.is_connected:
+            self._can_service.disconnect()
+            self.is_connected = False
 
     def send_sync(self):
         self._motor_service.send_sync()
 
     def plan_and_execute_trajectory(self):
-        # --- MODIFIED: This method now finds all selected items in our custom list ---
         self.sync_motors.clear()
         all_motor_names = [f"Motor {m.id}" for m in self.motors]
-
         for name in all_motor_names:
-            # Check if the selectable item for this motor exists and is selected (value is True)
             if dpg.does_item_exist(f"selectable_{name}") and dpg.get_value(f"selectable_{name}"):
                 try:
                     motor_id = int(name.split(" ")[1])
@@ -378,242 +338,23 @@ class MainViewModel:
             self.log_message("ERROR: No motors selected for synchronized move.")
             return
 
-        if self.is_moving:
-            self.log_message("Cannot start new move: A move is already in progress.")
-            return
-
-        # Use the first motor in the list as the reference for current position
-        reference_motor = self.sync_motors[0]
-        current_pos = reference_motor.angle
-        # --- END MODIFICATION ---
-        
         target_pos = dpg.get_value("pos_cmd_input")
         max_vel = dpg.get_value("vel_cmd_input")
         max_acc = dpg.get_value("acc_cmd_input")
-
+        
         if max_vel <= 0 or max_acc <= 0:
             self.log_message("ERROR: Max Velocity and Acceleration must be positive.")
             return
-            
-        self.trajectory_points = self._generate_s_curve_trajectory_points(current_pos, target_pos, max_vel, max_acc)
-        
-        if not self.trajectory_points:
-            self.log_message("Could not plan trajectory.")
-            return
-            
-        self.log_message(f"Starting S-Curve trajectory for {len(self.sync_motors)} motors with {len(self.trajectory_points)} points.")
-        self.is_moving = True
-        self.trajectory_index = 0
-        self.trajectory_start_time = time.time()
+
+        self.log_message(f"Sending trajectory command to {len(self.sync_motors)} motors.")
         
         for motor in self.sync_motors:
             self.enable_motor_by_id(motor.id, True)
+            self._motor_service.send_trajectory_command(motor.id, target_pos, max_vel, max_acc)
 
         time.sleep(0.02)
         self.send_sync()
 
-    def _generate_trapezoidal_fallback(self, p0, p1, v_max, a_max):
-        delta_p = p1 - p0
-        direction = np.sign(delta_p)
-        
-        t_ramp = v_max / a_max
-        p_ramp = 0.5 * a_max * t_ramp**2
-
-        if abs(delta_p) < 2 * p_ramp:
-            t_ramp = np.sqrt(abs(delta_p) / a_max)
-            t_total = 2 * t_ramp
-            v_actual_max = a_max * t_ramp
-            t_cruise = 0
-        else:
-            p_cruise = abs(delta_p) - 2 * p_ramp
-            t_cruise = p_cruise / v_max
-            t_total = 2 * t_ramp + t_cruise
-            v_actual_max = v_max
-        
-        points = []
-        t = 0
-        while t <= t_total:
-            if t < t_ramp:
-                acc = direction * a_max
-                vel = acc * t
-                pos = p0 + 0.5 * acc * t**2
-            elif t < t_ramp + t_cruise:
-                acc = 0.0
-                vel = direction * v_actual_max
-                p_so_far = 0.5 * direction * a_max * t_ramp**2
-                pos = p0 + p_so_far + vel * (t - t_ramp)
-            else:
-                t_decel = t - (t_ramp + t_cruise)
-                acc = -direction * a_max
-                vel = direction * v_actual_max + acc * t_decel
-                p_so_far = direction * (p_ramp + v_actual_max * t_cruise)
-                pos = p0 + p_so_far + (direction * v_actual_max * t_decel) + (0.5 * acc * t_decel**2)
-
-            points.append((t, pos, vel, acc))
-            t += self.trajectory_update_period
-        
-        points.append((t_total, p1, 0, 0))
-        return points
-
-    def _generate_s_curve_trajectory_points(self, p0, p1, v_max, a_max):
-        """
-        Generates a 7-phase S-curve trajectory.
-
-        This version corrects a fundamental error in the planning stage. The previous
-        calculation for `p_ramp` (distance during acceleration) was incorrect,
-        overestimating the distance and causing the cruise phase to be too short.
-        This resulted in the trajectory undershooting the target. The formula has
-        been replaced with the kinematically correct equation, ensuring the planner
-        accurately computes phase timings and total displacement.
-        """
-        j_max = a_max * 10  # A common heuristic for jerk
-
-        delta_p = p1 - p0
-        if abs(delta_p) < 1e-6:
-            return [(0, p0, 0, 0)]
-        direction = np.sign(delta_p)
-        abs_delta_p = abs(delta_p)
-
-        # --- 1. Planning Stage: Determine Profile Shape and Timings ---
-
-        # Condition 1: Check if v_max is reachable given a_max.
-        if v_max * a_max / j_max > v_max**2:
-            # This is equivalent to a_max**2 / j_max > v_max
-            self.log_message("Move too short for S-Curve (a_max unreachable), using Trapezoidal fallback.")
-            return self._generate_trapezoidal_fallback(p0, p1, v_max, a_max)
-
-        # Time to reach a_max from zero acceleration
-        t_j = a_max / j_max
-        # Time at constant a_max to reach v_max
-        t_a = v_max / a_max - t_j
-
-        # --- THE CORE FIX ---
-        # Calculate the distance covered during the acceleration and deceleration ramps.
-        # The previous formula `p_ramp = v_max * (t_j + t_a)` was incorrect as it
-        # calculated the area of a rectangle, not the area under the S-shaped curve.
-        # The correct formula is:
-        p_ramp = 0.5 * v_max * (v_max / a_max + a_max / j_max)
-
-        # Condition 2: Check if there is a cruise phase.
-        if abs_delta_p < 2 * p_ramp:
-            self.log_message("Move too short for S-Curve cruise phase, using Trapezoidal fallback.")
-            # Note: A full implementation would calculate a triangular or abbreviated profile here.
-            return self._generate_trapezoidal_fallback(p0, p1, v_max, a_max)
-
-        # If a cruise phase exists, calculate its duration.
-        p_cruise = abs_delta_p - 2 * p_ramp
-        t_cruise = p_cruise / v_max
-
-        # Calculate phase transition timestamps
-        t1 = t_j
-        t2 = t1 + t_a
-        t3 = t2 + t_j
-        t4 = t3 + t_cruise
-        t5 = t4 + t_j
-        t6 = t5 + t_a
-        t7 = t6 + t_j
-        t_total = t7
-
-        # --- 2. Boundary Condition Calculation ---
-        # Calculate the true kinematic state at the end of each phase.
-
-        # End of Phase 1
-        a1_end = direction * j_max * t1
-        v1_end = direction * 0.5 * j_max * t1**2
-        p1_end = p0 + direction * (1/6) * j_max * t1**3
-        
-        # End of Phase 2
-        a2_end = a1_end
-        v2_end = v1_end + a1_end * t_a
-        p2_end = p1_end + v1_end * t_a + 0.5 * a1_end * t_a**2
-
-        # End of Phase 3
-        a3_end = a2_end - direction * j_max * t_j
-        v3_end = v2_end + a2_end * t_j - 0.5 * direction * j_max * t_j**2
-        p3_end = p2_end + v2_end * t_j + 0.5 * a2_end * t_j**2 - (1/6) * direction * j_max * t_j**3
-
-        # End of Phase 4
-        a4_end = 0.0
-        v4_end = v3_end
-        p4_end = p3_end + v3_end * t_cruise
-
-        # End of Phase 5
-        a5_end = a4_end - direction * j_max * t_j
-        v5_end = v4_end - 0.5 * direction * j_max * t_j**2
-        p5_end = p4_end + v4_end * t_j - (1/6) * direction * j_max * t_j**3
-
-        # End of Phase 6
-        a6_end = a5_end
-        v6_end = v5_end + a5_end * t_a
-        p6_end = p5_end + v5_end * t_a + 0.5 * a5_end * t_a**2
-
-        # --- 3. Generation Stage: Create Trajectory Points ---
-        points = []
-        t = 0.0
-        while t <= t_total:
-            pos, vel, acc = 0.0, 0.0, 0.0
-            
-            if t <= t1:
-                _t = t
-                jerk = direction * j_max
-                p_initial, v_initial, a_initial = p0, 0.0, 0.0
-                acc = a_initial + jerk * _t
-                vel = v_initial + a_initial * _t + 0.5 * jerk * _t**2
-                pos = p_initial + v_initial * _t + 0.5 * a_initial * _t**2 + (1/6) * jerk * _t**3
-            
-            elif t <= t2:
-                _t = t - t1
-                p_initial, v_initial, a_initial = p1_end, v1_end, a1_end
-                acc = a_initial
-                vel = v_initial + a_initial * _t
-                pos = p_initial + v_initial * _t + 0.5 * a_initial * _t**2
-
-            elif t <= t3:
-                _t = t - t2
-                jerk = -direction * j_max
-                p_initial, v_initial, a_initial = p2_end, v2_end, a2_end
-                acc = a_initial + jerk * _t
-                vel = v_initial + a_initial * _t + 0.5 * jerk * _t**2
-                pos = p_initial + v_initial * _t + 0.5 * a_initial * _t**2 + (1/6) * jerk * _t**3
-
-            elif t <= t4:
-                _t = t - t3
-                p_initial, v_initial, a_initial = p3_end, v3_end, a3_end
-                acc = 0.0
-                vel = v_initial
-                pos = p_initial + v_initial * _t
-
-            elif t <= t5:
-                _t = t - t4
-                jerk = -direction * j_max
-                p_initial, v_initial, a_initial = p4_end, v4_end, a4_end
-                acc = a_initial + jerk * _t
-                vel = v_initial + a_initial * _t + 0.5 * jerk * _t**2
-                pos = p_initial + v_initial * _t + 0.5 * a_initial * _t**2 + (1/6) * jerk * _t**3
-
-            elif t <= t6:
-                _t = t - t5
-                p_initial, v_initial, a_initial = p5_end, v5_end, a5_end
-                acc = a_initial
-                vel = v_initial + a_initial * _t
-                pos = p_initial + v_initial * _t + 0.5 * a_initial * _t**2
-
-            else:  # t <= t7
-                _t = t - t6
-                jerk = direction * j_max
-                p_initial, v_initial, a_initial = p6_end, v6_end, a6_end
-                acc = a_initial + jerk * _t
-                vel = v_initial + a_initial * _t + 0.5 * jerk * _t**2
-                pos = p_initial + v_initial * _t + 0.5 * a_initial * _t**2 + (1/6) * jerk * _t**3
-
-            points.append((t, pos, vel, acc))
-            t += self.trajectory_update_period
-
-        # Ensure the final point is exactly at the target with zero velocity/acceleration.
-        points.append((t_total, p1, 0.0, 0.0))
-        return points
-
-    # --- ALL OTHER METHODS (gearing, tuning, etc.) ---
     def start_gearing(self, leader_id_str, follower_id_str, ratio_str):
         try:
             leader_id = int(leader_id_str)
